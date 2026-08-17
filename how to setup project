@@ -1,0 +1,79 @@
+
+
+C:\Users\Hp>mkdir python_fast_api
+
+C:\Users\Hp>cd python_fast_api
+
+C:\Users\Hp\python_fast_api>mkdir movie_backend
+
+C:\Users\Hp\python_fast_api>cd movie_backend
+
+C:\Users\Hp\python_fast_api\movie_backend>code .
+
+=========================================================================================================================
+
+Step 1 — Initialize with uv
+
+Your terminal is already here:
+PS C:\Users\Hp\python_fast_api\movie_backend>
+
+Run:
+uv init
+
+Then:
+uv add "fastapi[standard]" sqlalchemy alembic "python-jose[cryptography]" argon2-cffi pydantic-settings psycopg[binary]
+
+========================================================================================================================
+
+Step 2: Create main.py
+
+Inside:
+src/movie_backend/
+
+create:
+main.py
+
+
+src/
+└── movie_backend/
+    └── main.py
+
+Put:
+from fastapi import FastAPI
+
+app = FastAPI(
+    title="Movie Backend API",
+    description="Industry-style Movie Management REST API",
+    version="1.0.0",
+)
+
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "UP",
+        "service": "movie-backend",
+    }
+
+This gives us the foundation.
+
+==================================================================================================================================
+
+Step 3 Run the application
+
+From:
+PS C:\Users\Hp\python_fast_api\movie_backend>
+
+run:
+uv run uvicorn movie_backend.main:app --reload
+
+The important part is: movie_backend.main:app because our structure is:
+
+src/
+└── movie_backend/
+    └── main.py
+
+and inside main.py
+
+=====================================================================================================================================
+
