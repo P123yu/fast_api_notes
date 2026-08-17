@@ -22,7 +22,6 @@ uv init
 
 Then:
 uv add "fastapi[standard]" sqlalchemy alembic "python-jose[cryptography]" argon2-cffi pydantic-settings psycopg[binary]
-
 ========================================================================================================================
 
 Step 2: Create main.py
@@ -92,3 +91,690 @@ and calling it should return:
 }
 
 =======================================================================================================================================
+
+step 5: create core folder 
+
+movie_backend/
+└── src/
+    └── movie_backend/
+        ├── core/
+        │   ├── __init__.py
+        │   └── config.py
+        ├── __init__.py
+        └── main.py
+
+1. Put this in config.py
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+class Settings(BaseSettings):
+
+    APP_NAME: str = "Movie Backend API"
+    APP_VERSION: str = "1.0.0"
+    DEBUG: bool = True
+    DATABASE_URL: str
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore"
+    )
+
+settings = Settings()
+
+
+
+2. Create .env
+
+At the project root, not inside src:
+
+movie_backend/
+├── .env
+├── pyproject.toml
+├── uv.lock
+└── src/
+    └── movie_backend/
+
+For now put:
+
+APP_NAME=Movie Backend API
+APP_VERSION=1.0.0
+DEBUG=True
+
+DATABASE_URL=postgresql+psycopg://postgres:password@localhost:5432/movie_db
+
+=================================================================================================================
+
+.env
+ ↓
+Pydantic Settings
+ ↓
+settings
+ ↓
+Application
+
+Then anywhere in the application we can do:
+
+from movie_backend.core.config import settings
+print(settings.DATABASE_URL)
+
+This is much better because configuration and secrets stay outside the source code.
+
+currently have:
+core/
+├── __init__.py
+└── config.py
+
+Next we'll connect this configuration to PostgreSQL and create the SQLAlchemy engine/session properly.
+==================================================================================================================
+
+step 6: Create db package
+
+Inside:
+src/movie_backend/
+
+create:
+
+db/
+├── __init__.py
+└── database.py
+
+So your structure becomes:
+
+src/
+└── movie_backend/
+    ├── __init__.py
+    ├── main.py
+    │
+    ├── core/
+    │   ├── __init__.py
+    │   └── config.py
+    │
+    └── db/
+        ├── __init__.py
+        └── database.py
+
+2. Configure SQLAlchemy
+Put this in database.py:
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+
+from movie_backend.core.config import settings
+
+engine = create_engine(
+    settings.DATABASE_URL,
+    echo=settings.DEBUG,
+)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+What each part does
+
+engine
+engine = create_engine(...)
+
+The Engine is SQLAlchemy's connection interface to PostgreSQL.
+
+Conceptually:
+
+FastAPI
+   ↓
+SQLAlchemy Engine
+   ↓
+PostgreSQL
+
+SessionLocal
+SessionLocal = sessionmaker(...)
+
+A Session represents a unit of database work.
+
+For example:
+
+Request
+  ↓
+Create Session
+  ↓
+Query / Insert / Update
+  ↓
+Commit or Rollback
+  ↓
+Close Session
+
+
+Base
+class Base(DeclarativeBase):
+    pass
+
+All our SQLAlchemy models will eventually inherit from this:
+class Movie(Base):
+    ...
+
+SQLAlchemy then knows that Movie represents a database table.
+
+3. Create a database dependency
+In the same database.py, add this below Base:
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+FastAPI will:
+
+Request
+   ↓
+get_db()
+   ↓
+Create Session
+   ↓
+Route uses Session
+   ↓
+finally
+   ↓
+Close Session
+
+This prevents database sessions from being left open.
+
+and we'll test the connection and then set up Alembic, which will give us:
+
+SQLAlchemy Models
+       ↓
+Alembic Migration
+       ↓
+PostgreSQL Tables
+
+
+Step 4 — Test SQLAlchemy connection
+
+Now temporarily add this function to database.py:
+
+def test_connection():
+    try:
+        with engine.connect() as connection:
+            print("Database connection successful!")
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+
+Your database.py should now look like:
+
+
+-----------------------------------------------------------------------------------------
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
+
+from movie_backend.core.config import settings
+
+
+engine = create_engine(
+    settings.DATABASE_URL,
+    echo=settings.DEBUG,
+)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def test_connection():
+    try:
+        with engine.connect():
+            print("Database connection successful!")
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+
+---------------------------------------------------------------------------------------
+
+Then from the project root:
+uv run python -c "from movie_backend.db.database import test_connection; test_connection()"
+
+Expected result
+If everything is configured correctly:
+Database connection successful!
+
+===========================================================================================================================
+
+step 7: Alembic
+
+So our foundation is now:
+
+FastAPI
+   ↓
+Pydantic Settings
+   ↓
+SQLAlchemy Engine
+   ↓
+psycopg
+   ↓
+PostgreSQL 
+
+
+Next: Alembic
+
+Now we'll introduce Alembic for database migrations.
+
+The workflow we'll use is:
+
+SQLAlchemy Model
+       ↓
+   Alembic
+       ↓
+Migration File
+       ↓
+   PostgreSQL
+       ↓
+    Table
+
+For example, when we create:
+
+class Movie(Base):
+    ...
+
+we won't manually execute:
+
+CREATE TABLE movies ...
+
+Instead:
+
+Model change
+    ↓
+alembic revision --autogenerate
+    ↓
+Migration generated
+    ↓
+alembic upgrade head
+    ↓
+PostgreSQL updated
+
+That's the workflow.
+
+First, initialize Alembic
+Stop the Uvicorn server if it's still running with:
+Ctrl + C
+
+
+Then from:
+C:\Users\Hp\python_fast_api\movie_backend
+
+run:
+uv run alembic init migrations
+
+After Alembic initialized successfully.
+our structure is now:
+
+movie_backend/
+├── migrations/  <-----------------
+│   ├── versions/
+│   ├── env.py
+│   ├── README
+│   └── script.py.mako
+│
+├── src/
+│   └── movie_backend/
+│       ├── core/
+│       │   ├── __init__.py
+│       │   └── config.py
+│       ├── db/
+│       │   ├── __init__.py
+│       │   └── database.py
+│       ├── __init__.py
+│       └── main.py
+│
+├── .env
+├── alembic.ini
+├── pyproject.toml
+└── uv.lock
+
+Now we need to connect Alembic → SQLAlchemy Base.metadata.
+
+Step 1 — Modify migrations/env.py
+Open: 
+migrations/env.py
+
+Find:
+target_metadata = None
+
+and make it like:
+target_metadata = Base.metadata
+
+and add these two imports on top:
+from movie_backend.db.database import Base
+from movie_backend.core.config import settings
+
+Step 2 — Configure the database URL
+
+We don't want to hardcode the PostgreSQL URL in alembic.ini, because we already have it in .env.
+
+In migrations/env.py, find:
+config = context.config
+
+Immediately after it, add:
+
+config.set_main_option(
+    "sqlalchemy.url",
+    settings.DATABASE_URL,
+)
+
+
+instead of having a second database configuration.
+
+
+Now Alembic gets:
+
+.env
+ ↓
+Settings
+ ↓
+DATABASE_URL
+ ↓
+Alembic
+
+
+or 
+
+
+.env
+  │
+  ▼
+Settings
+  │
+  ▼
+settings.DATABASE_URL
+  │
+  ▼
+Alembic env.py
+  │
+  ▼
+SQLAlchemy
+  │
+  ▼
+PostgreSQL
+
+And:
+target_metadata = Base.metadata
+
+is what allows:
+
+SQLAlchemy Models
+       ↓
+Base.metadata
+       ↓
+Alembic autogenerate
+       ↓
+Migration
+
+============================================================================================================================
+
+step 8: model (Movie SQLAlchemy model + first Alembic migration)
+
+----------------------------------------------------------------------
+
+for model 
+
+Movie SQLAlchemy Model
+        ↓
+    Base.metadata
+        ↓
+      Alembic
+        ↓
+Migration generated
+        ↓
+PostgreSQL
+
+-----------------------------------------------------------------------------------
+create all other folder like 
+
+                  FastAPI
+                     │
+                     ▼
+                  Routers
+                     │
+                     ▼
+                  Services
+                     │
+                     ▼
+                Repositories
+                     │
+                     ▼
+                  Models
+                     │
+                     ▼
+                 Database
+                     │
+                     ▼
+                PostgreSQL
+
+
+
+src/
+└── movie_backend/
+    ├── core/
+    │   ├── __init__.py
+    │   └── config.py
+    │
+    ├── db/
+    │   ├── __init__.py
+    │   └── database.py
+    │
+    ├── model/
+    │   ├── __init__.py
+    │   └── movie.py
+    │
+    ├── repository/
+    │   ├── __init__.py
+    │   └── movie_repository.py
+    │
+    ├── router/
+    │   ├── __init__.py
+    │   └── movie_router.py
+    │
+    ├── schema/
+    │   ├── __init__.py
+    │   └── movie.py
+    │
+    ├── service/
+    │   ├── __init__.py
+    │   └── movie_service.py
+    │
+    ├── main.py
+    └── __init__.py
+
+
+
+once model folder is created do one important thing 
+
+And in migrations/env.py add:
+from movie_backend.model import Movie
+
+so total three imports we have till now:
+from movie_backend.db.database import Base
+from movie_backend.core.config import settings
+from movie_backend.model import Movie
+
+
+src/
+└── movie_backend/
+    ├── core/
+    │   └── config.py
+    │
+    ├── db/
+    │   └── database.py
+    │
+    ├── model/
+    │   └── movie.py
+    │
+    ├── repository/
+    │   └── movie_repository.py
+    │
+    ├── router/
+    │   └── movie_router.py
+    │
+    ├── schema/
+    │   └── movie.py
+    │
+    ├── service/
+    │   └── movie_service.py
+    │
+    └── main.py
+
+
+1. Database          ✅
+2. Alembic           ✅
+3. Models            ← WE ARE HERE
+4. Schemas
+5. Repository
+6. Service
+7. Router
+8. Dependency Injection
+9. Exception Handling
+10. Authentication
+11. Testing
+12. Docker
+13. Production config
+
+
+So our next step
+Let's create:
+model/movie.py
+
+with the SQLAlchemy Movie entity.
+
+Then we'll connect it to Alembic:
+
+Movie Model
+    ↓
+Base.metadata
+    ↓
+Alembic autogenerate
+    ↓
+PostgreSQL movies table
+
+------------------------------------------------------------------------------------------------------------------
+
+Step 1 — Create model/movie.py
+
+Open:
+src/movie_backend/model/movie.py
+
+Add:
+from datetime import datetime
+
+from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column
+
+from movie_backend.db.database import Base
+
+
+class Movie(Base):
+    __tablename__ = "movies"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    title: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    description: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    genre: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    release_year: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+What we're doing here
+
+This:
+class Movie(Base):
+
+means Movie is a SQLAlchemy ORM model.
+
+And:
+__tablename__ = "movies"
+
+means PostgreSQL will have:
+movies with:
+
+id
+title
+description
+genre
+release_year
+created_at
+updated_at
+
+
+--------------------------------------
+
+Step 2 — Update model/__init__.py
+
+Open:
+src/movie_backend/model/__init__.py
+
+Put:
+
+from movie_backend.model.movie import Movie
+__all__ = ["Movie"]
+
+This gives us a clean import:
+from movie_backend.model import Movie
+
+instead of:
+from movie_backend.model.movie import Movie
+
+--------------------------------------------
+
+
+
+
