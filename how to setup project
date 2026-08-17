@@ -775,6 +775,310 @@ from movie_backend.model.movie import Movie
 
 --------------------------------------------
 
+Why do we import Movie?
+
+This is an important Alembic concept:
+
+env.py
+   │
+   │ imports Movie
+   ▼
+Movie(Base)
+   │
+   ▼
+Base.metadata
+   │
+   ▼
+Alembic sees "movies" table
+
+Without importing the model, Alembic may see an empty Base.metadata and say:
+No new upgrade operations detected even though you created a model.
+
+--------------------------------------------------------
+Step 4 — Check Alembic
+
+Run:
+uv run alembic check
+
+No new upgrade operations detected.
+Because we've created a new model that doesn't exist in PostgreSQL yet.
+You may see something indicating pending migration changes.
+
+Step 5 — Generate the migration
+
+Now run:
+uv run alembic revision --autogenerate -m "create movies table"
+
+You should see something similar to:
+INFO  [alembic.autogenerate.compare] Detected added table 'movies'
+Generating .../migrations/versions/xxxx_create_movies_table.py
+
+Your structure will become:
+
+migrations/
+├── env.py
+├── versions/
+│   └── xxxxx_create_movies_table.py   <----------------------
+├── README
+└── script.py.mako
+
+Don't manually edit the generated migration yet.
+
+---------------------------------------------------------------
+
+Step 6 — Apply the migration
+
+Run:
+uv run alembic upgrade head
+
+You should see:
+Running upgrade -> xxxxx, create movies table
+
+Now the database contains:
+
+PostgreSQL
+   │
+   └── movies
+       ├── id
+       ├── title
+       ├── description
+       ├── genre
+       ├── release_year
+       ├── created_at
+       └── updated_at
+
+
+-------------------------------------------------------------------
+
+Step 7 — Verify Alembic
+
+Run:
+uv run alembic check
+
+Now it should return:
+No new upgrade operations detected.
+If you get that, our Model + Alembic + PostgreSQL setup is officially complete.
+
+That gives us:
+
+SQLAlchemy Model
+       ↓
+Base.metadata
+       ↓
+Alembic autogenerate
+       ↓
+Migration file
+       ↓
+alembic upgrade head
+       ↓
+PostgreSQL
+
+=========================================================================================================================
+
+step 9: Schema 
+
+Then we'll move to schema/movie.py
+
+We do not use the SQLAlchemy model directly as our API request/response model.
+
+We'll have:
+
+model/movie.py
+        ↓
+Database representation
+
+
+schema/movie.py
+        ↓
+API representation
+
+-----------------------------------------------------------
+
+from pydantic import BaseModel
+
+class MovieRequest(BaseModel):
+    title: str
+    description: str | None = None
+    genre: str
+    release_year: int
+
+
+class MovieResponse(BaseModel):
+    id: int
+    title: str
+    description: str | None
+    genre: str
+    release_year: int
+
+    class Config:
+        from_attributes = True
+
+------------------------------------------------------------
+
+                 API
+                  │
+                  ▼
+          Pydantic Schema
+                  │
+                  ▼
+          Service Layer
+                  │
+                  ▼
+        SQLAlchemy Model
+                  │
+                  ▼
+            PostgreSQL
+
+--------------------------------------------------------------
+
+============================================================================================================================
+
+
+So database + Alembic + Movie model are working. 
+
+Now let's proceed one step at a time.
+
+Our flow will simply be:
+
+Router
+   ↓
+Service
+   ↓
+Repository
+   ↓
+Database
+
+--------------------------------------------------------------------------------------------------------------------
+
+1. create repository
+
+from sqlalchemy.orm import Session
+from movie_backend.model.movie import Movie
+
+class MovieRepository:
+
+    def create(self, db: Session, movie: Movie) -> Movie:
+        db.add(movie)
+        db.commit()
+        db.refresh(movie)
+
+        return movie
+
+    def get_all(self, db: Session):
+        return db.query(Movie).all()
+
+----------------------------------------------------------------------------------------------------------------------
+
+2. create service 
+
+from sqlalchemy.orm import Session
+
+from movie_backend.model.movie import Movie
+from movie_backend.repository.movie_repository import MovieRepository
+
+class MovieService:
+
+    def __init__(self):
+        self.repository = MovieRepository()
+
+    def create_movie(self, db: Session, movie: Movie) -> Movie:
+        return self.repository.create(db, movie)
+
+    def get_all_movies(self, db: Session):
+        return self.repository.get_all(db)
+
+
+--------------------------------------------------------------------------------------------------------------------------
+
+3. create controller / router 
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from movie_backend.db.database import get_db
+from movie_backend.schema.movie import MovieCreate, MovieResponse
+from movie_backend.model.movie import Movie
+from movie_backend.service.movie_service import MovieService
+
+
+router = APIRouter(
+    prefix="/api/v1/movies",
+    tags=["Movies"]
+)
+
+service = MovieService()
+
+
+@router.post("/", response_model=MovieResponse)
+def create_movie(
+    movie: MovieCreate,
+    db: Session = Depends(get_db)
+):
+    movie_model = Movie(**movie.model_dump())
+
+    return service.create_movie(db, movie_model)
+
+
+@router.get("/", response_model=list[MovieResponse])
+def get_all_movies(
+    db: Session = Depends(get_db)
+):
+    return service.get_all_movies(db)
+
+-------------------------------------------------------------------------------------------------------------------------
+
+4. register router in main.py file 
+
+from fastapi import FastAPI
+
+from movie_backend.router.movie_router import router as movie_router
+
+
+app = FastAPI(
+    title="Movie Backend API",
+    description="Industry-style Movie Management REST API",
+    version="1.0.0",
+)
+
+app.include_router(movie_router)
+
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "UP",
+        "service": "movie-backend"
+    }
+
+
+GET /api/v1/movies
+        ↓
+     Router
+        ↓
+     Service
+        ↓
+   Repository
+        ↓
+   PostgreSQL
+
+
+|                      | `Column()` style | `Mapped` + `mapped_column()` |
+| -------------------- | ---------------- | ---------------------------- |
+| SQLAlchemy 2.x       | ✅                | ✅                            |
+| Type hints           | ❌/limited        | ✅                            |
+| IDE support          | Good             | Better                       |
+| Modern projects      | Less preferred   | **Preferred**                |
+| Static type checking | Limited          | **Excellent**                |
+| New project          | ❌                | **✅**                        |
 
 
 
+Base
+    ↓
+SQLAlchemy Models
+    ↓
+Repository
+    ↓
+Service
+    ↓
+Router
