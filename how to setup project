@@ -1082,3 +1082,75 @@ Repository
 Service
     ↓
 Router
+
+
+
+FastAPI + SQLAlchemy + Alembic
+
+SQLAlchemy Model
+       ↓
+SQLAlchemy ORM
+       ↓
+Alembic
+       ↓
+Migration
+       ↓
+PostgreSQL
+
+
+
+======================== points to remember =========================
+
+One-line answer to your exact question:
+If you add rating to an existing SQLAlchemy model and simply restart FastAPI, will SQLAlchemy automatically add the rating column to PostgreSQL without Alembic?
+
+No. ❌
+If you want that behavior, you'd need a schema-update mechanism; in production SQLAlchemy projects, Alembic is the standard choice because it gives you controlled, versioned migrations rather than silently modifying the database.
+
+
+SQLAlchemy has something similar — BUT!
+
+SQLAlchemy has:
+
+Base.metadata.create_all(engine)
+
+But this behaves differently.
+
+It essentially means:
+
+Create the table if it doesn't already exist.
+
+It does not mean:
+
+Compare existing table with model and ALTER the existing table whenever the model changes.
+
+So:
+
+Table doesn't exist
+        ↓
+create_all()
+        ↓
+Create table ✅
+
+But:
+
+Table already exists
+        ↓
+Add rating to Python model
+        ↓
+create_all()
+        ↓
+Add rating? ❌
+
+That's the crucial difference.
+
+So if you REALLY wanted automatic changes without Alembic?
+
+You would have to implement the schema change yourself, for example:
+
+ALTER TABLE movies ADD COLUMN rating FLOAT;
+
+or use another schema-management mechanism.
+
+But SQLAlchemy ORM itself is not intended to be your migration system.
+
