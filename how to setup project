@@ -1154,3 +1154,45 @@ or use another schema-management mechanism.
 
 But SQLAlchemy ORM itself is not intended to be your migration system.
 
+
+
+========================================================================================================================================================================================
+
+$baseName = Read-Host "Enter project name"
+
+$base = "src\$baseName"
+
+$files = @(
+    "$base\__init__.py",
+    "$base\main.py",
+
+    "$base\core\__init__.py",
+    "$base\core\config.py",
+
+    "$base\db\__init__.py",
+    "$base\db\database.py",
+
+    "$base\model\__init__.py",
+    "$base\model\$baseName.py",
+
+    "$base\repository\__init__.py",
+    "$base\repository\$baseName`_repository.py",
+
+    "$base\router\__init__.py",
+    "$base\router\$baseName`_router.py",
+
+    "$base\schema\__init__.py",
+    "$base\schema\$baseName.py",
+
+    "$base\service\__init__.py",
+    "$base\service\$baseName`_service.py"
+)
+
+$files | ForEach-Object {
+    $directory = Split-Path $_
+
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    New-Item -ItemType File -Path $_ -Force | Out-Null
+}
+
+Write-Host "Complete $baseName Backend structure created!"
